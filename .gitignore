@@ -194,3 +194,5 @@ FakesAssemblies/
 /.vs/Indicium-Supra/v16
 *.DotSettings
 /bin/inject.cmd
+
+.vs/*
