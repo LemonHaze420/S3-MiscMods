@@ -18,3 +18,4 @@ Please see `Indicium-Supra` build instructions.
 ## Sources
 
 - [Indicium-Supra](https://github.com/nefarius/Indicium-Supra)
+- [inih](https://github.com/benhoyt/inih)
