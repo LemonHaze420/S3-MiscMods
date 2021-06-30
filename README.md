@@ -16,6 +16,6 @@ Miscellaneous modifications for Shenmue III - featuring a customisable 'Classic 
 Please see `Indicium-Supra` build instructions.
 
 ## Sources
-
+- [ShenmueIIISDK](https://github.com/LemonHaze420/ShenmueIIISDK)
 - [Indicium-Supra](https://github.com/nefarius/Indicium-Supra)
 - [inih](https://github.com/benhoyt/inih)
