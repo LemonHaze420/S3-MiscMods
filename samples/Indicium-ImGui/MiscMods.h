@@ -27,7 +27,7 @@ using namespace SDK;
 #else
 #define MOD_NAME					"MiscMods"
 #endif
-#define MOD_VER						"1.12d"
+#define MOD_VER						"1.13"
 #define MOD_STRING					MOD_NAME " " MOD_VER
 
 //#undef _RELEASE_MODE
@@ -392,11 +392,22 @@ void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
 		// Swap Character (for Ryo)
 		if (_this->IsA(ABP_S3_Character_Adventure_C::StaticClass())) {
 			ABP_S3_Character_Adventure_C* This = reinterpret_cast<ABP_S3_Character_Adventure_C*> (_this);		
-			if (shouldSwap) {
+			if (shouldSwap && !hasSwapped) {
 				if (swapCharacterMap.find(swapCharacter) != swapCharacterMap.end()) {
-					//auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterMap.at(swapCharacter), 0, 0, nullptr, true);
-					//if (temp) This->Mesh->SetSkeletalMesh(temp, true);
-					//else printf("Couldn't load \'\'%ws\'\'\n", swapCharacterMap.at(swapCharacter));
+					printf("Swapping Ryo for \'\'%ws\'\'\n", swapCharacterMap.at(swapCharacter));
+					auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterMap.at(swapCharacter), 0, 0, nullptr, true);
+					if (temp) {
+						This->Mesh->SetSkeletalMesh(temp, true); 
+						
+						for (int i = 0; i < temp->Materials.Num(); ++i) {
+							This->Mesh->SetMaterial(i, temp->Materials[i].MaterialInterface);
+						}
+						hasSwapped = true;
+					}
+					else {
+						printf("Couldn't load \'\'%ws\'\'\n", swapCharacterMap.at(swapCharacter));
+						hasSwapped = false;
+					}
 				}
 			}
 		}
@@ -781,19 +792,21 @@ void RenderScene()
 			ImGui::Unindent();
 		}
 		
-		/*ImGui::Checkbox("Should Swap?", &shouldSwap);
+		ImGui::Checkbox("Should Swap?", &shouldSwap);
 		if (shouldSwap) {
-			std::string currentCharName = swapCharacterNames.find(swapCharacter)->second;
-			ImGui::Text("Swap Character: %s", currentCharName.c_str());
-			//ImGui::ListBoxHeader("");
-			/*for (auto aChar : swapCharacterNames) {
+			ImGui::ListBoxHeader("##swapchar");
+			for (auto aChar : swapCharacterNames) {
 				std::string& aCharName = aChar.second;
 				if (ImGui::Selectable(aCharName.c_str(), charSelectedList)) {
-					//swapCharacter = aChar.first;
+					swapCharacter = aChar.first;
+					hasSwapped = false;
+
+					std::string currentCharName = aChar.second;
+					printf("Swap Character: %s\n", currentCharName.c_str());
 				}
 			}
 			ImGui::ListBoxFooter(); 
-		}*/
+		}
 
 		ImGui::End();
 	}
@@ -836,6 +849,8 @@ void Attach() {
 		MessageBoxA(NULL, "Unable to find StaticLoadObject offset. Exiting.", "Misc Mods", MB_OK);
 		return;
 	}
+	
+	swapCharacter = RyoHazuki;
 
 	MH_CreateHook(reinterpret_cast<void*>(g_BaseAddress + staticLoadOffs), StaticLoadObject_Hook, reinterpret_cast<void**>(&StaticLoadObject_orig));
 	MH_EnableHook(reinterpret_cast<void*>(g_BaseAddress + staticLoadOffs));
