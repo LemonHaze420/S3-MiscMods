@@ -601,8 +601,11 @@ enum SwapCharacter {
 	SWP_ZYO,
 	SWAPCHAR_MAX
 };
-static SwapCharacter swapCharacter = RyoHazuki;
-static std::map<SwapCharacter, const TCHAR*> swapCharacterMap = {
+
+static SwapCharacter swapCharacterRyo		= RyoHazuki;
+static SwapCharacter swapCharacterShenhua	= Shenhua;
+
+static std::map<SwapCharacter, const TCHAR*> swapCharacterPathMap = {
 	{RyoHazuki,		L"/Game/char/Adventure/RYO/Meshes/Body/000_00/SK_RYO_F000_00.SK_RYO_F000_00"},
 	{Shenhua,		L"/Game/char/Adventure/SHE/Meshes/Body/000_00/SK_SHE_F000_00.SK_SHE_F000_00"},
 	{Ren,			L"/Game/char/Adventure/REN/Meshes/Body/000_00/SK_REN_F000_00.SK_REN_F000_00"},
@@ -1200,12 +1203,12 @@ static std::map<SwapCharacter, const TCHAR*> swapCharacterMap = {
 	{ SWP_Z00, L"/Game/char/Adventure/Z00/Meshes/Body/000_00/SK_Z00_F000_00.SK_Z00_F000_00" },
 	{ SWP_ZYO, L"/Game/char/Adventure/ZYO/Meshes/Body/000_00/SK_ZYO_F000_00.SK_ZYO_F000_00" }
 };
-static std::map<SwapCharacter, std::string> swapCharacterNames = {
-	{RyoHazuki,"Ryo Hazuki"},
-	{Shenhua,  "Shenhua"},
-	{Ren,	   "Ren"},
-	{LanDi,	   "Lan Di"},
-	{Chai,	   "Chai"},
+static std::map<SwapCharacter, std::string> swapCharacterNameMap = {
+	{RyoHazuki,"RYO"},
+	{Shenhua,  "SHE"},
+	{Ren,	   "REN"},
+	{LanDi,	   "LAN"},
+	{Chai,	   "CHA"},
 	{ SWP_A00, "A00" },
 	{ SWP_A01, "A01" },
 	{ SWP_A02, "A02" },

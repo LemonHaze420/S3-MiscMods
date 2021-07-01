@@ -1,12 +1,16 @@
-#include <windows.h>
+#include <Windows.h>
 #include <iostream>
+#include <tchar.h>
 #include <string>
 #include <vector>
 #include <map>
 #include <fstream>
 #include <ostream>
-
+#include <locale>
+#include <codecvt>
 #include <filesystem>
+#include <Shlobj.h>
+#include <sstream>
 
 // Shenmue III SDK
 #include "SDK.h"
@@ -27,18 +31,11 @@ using namespace SDK;
 #else
 #define MOD_NAME					"MiscMods"
 #endif
-#define MOD_VER						"1.13"
+#define MOD_VER						"1.14"
 #define MOD_STRING					MOD_NAME " " MOD_VER
 
 //#undef _RELEASE_MODE
 //#define PROCESS_EVENT_LOGGER
-
-#define STATIC_LOAD_OBJECT_OFFS_V101_EGS		0x9B55B0
-#define STATIC_LOAD_OBJECT_OFFS_V101_CODEX		0x9B56B0
-#define STATIC_LOAD_OBJECT_OFFS_V10401_EGS		0x9B5670
-#define STATIC_LOAD_OBJECT_OFFS_V10401_CODEX	0x9B3750
-#define STATIC_LOAD_OBJECT_OFFS_V10501_EGS		0x9B1760
-#define STATIC_LOAD_OBJECT_OFFS_V10600_STEAM	0x9B4F20
 
 static bool g_ThreadAlive = true;
 
@@ -74,6 +71,91 @@ static bool bDumpHerbs = false;
 std::map<std::string, std::string> Locations;
 
 static bool bRyoForShenhua = false;
+
+static bool toggleReplacements = false;
+
+static bool verbose = true;
+
+std::string find_name_from_chara_enum(SwapCharacter ID) {
+	if (swapCharacterNameMap.find(ID) != swapCharacterNameMap.end()) {
+		return swapCharacterNameMap.find(ID)->second;
+	}
+}
+
+SwapCharacter find_chara_enum_from_name(std::string name)
+{
+	for (auto& map : swapCharacterNameMap) {
+		if(map.second == name)
+			return map.first;
+	}
+}
+
+class SwapCharacter_t {
+public:
+	SwapCharacter_t() {}
+	SwapCharacter_t(SwapCharacter _original, SwapCharacter _replacement) : original_chara(_original), replacement_chara(_replacement)
+	{
+		original	= find_name_from_chara_enum(original_chara);
+		replacement = find_name_from_chara_enum(replacement_chara);
+	}
+	SwapCharacter_t(std::string _original, std::string _replacement) : original(_original), replacement(_replacement)	{}
+	~SwapCharacter_t() = default;
+
+	SwapCharacter original_chara;
+	SwapCharacter replacement_chara;
+
+	std::string original;
+	std::string replacement;
+
+	bool should_swap = true;
+	bool has_swapped = false;
+
+	bool is_selected = false;
+};
+static std::vector<SwapCharacter_t> replacements;
+
+void read_char_replacements(std::string filename)
+{
+	if (!std::filesystem::exists(filename)) {
+		(verbose ? printf("[Error] CSV does not exist.\n") : 0);
+		return;
+	}
+
+	std::ifstream file(filename);
+	if (file.good()) {
+		(verbose ? printf("Loaded '%s'\n", filename.c_str()) : 0);
+		std::string field, line, replacement;
+
+		while (!file.eof()) {
+			// parse csv
+			std::getline(file, line);
+			std::stringstream ssline(line);
+
+			std::string toFind, toReplace;
+			ssline >> std::quoted(toFind);
+			std::getline(ssline, field, ',');
+			ssline >> std::quoted(toReplace);
+			std::getline(ssline, replacement);
+
+			// create a swap character
+			SwapCharacter_t tmp;
+			tmp.original			= toFind;
+			tmp.replacement			= toReplace;
+
+			tmp.original_chara		= find_chara_enum_from_name(toFind);
+			tmp.replacement_chara	= find_chara_enum_from_name(toReplace);
+			replacements.push_back(tmp);
+
+			if (replacements.size() % 16)
+				replacements.shrink_to_fit();
+
+			(verbose ? printf("Replacing '%s' with '%s'\n", find_name_from_chara_enum(tmp.original_chara).c_str(), find_name_from_chara_enum(tmp.replacement_chara).c_str()) : 0);
+			(verbose ? printf("Added replacement %d ['%s' ---> '%s']\n", (int)replacements.size(), toFind.c_str(), toReplace.c_str()) : 0);	
+		}
+		file.close();
+	}
+}
+
 
 bool HookUEFunc(std::string fnString, void* hookFn, void* origFn) {
 	UFunction* fnPtr = UObject::FindObject<UFunction>(fnString.c_str());
@@ -281,10 +363,17 @@ struct SkelMeshMod {
 };
 std::vector<SkelMeshMod> skelMeshMods;
 
-static bool hasSwapped = false;
-static bool save = false;
-static bool shouldSwap = false;
+// Should Swap Ryo?
+static bool hasSwappedRyo = false;
+static bool shouldSwapRyo = false;
+static USkeletalMesh* swapMeshRyo = nullptr;
 
+// Should Swap Shenhua?
+static bool hasSwappedShenhua = false;
+static bool shouldSwapShenhua = false;
+static USkeletalMesh* swapMeshShenhua = nullptr;
+
+static bool save = false;
 static bool forceCanSkipDialog = true, forceSkipIntro = true;
 
 UWorld* theWorld = nullptr;
@@ -390,23 +479,91 @@ void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
 	}
 	else {
 		// Swap Character (for Ryo)
+		// Ryo is the only ABP_S3_Character_Adventure_C instance.
 		if (_this->IsA(ABP_S3_Character_Adventure_C::StaticClass())) {
 			ABP_S3_Character_Adventure_C* This = reinterpret_cast<ABP_S3_Character_Adventure_C*> (_this);		
-			if (shouldSwap && !hasSwapped) {
-				if (swapCharacterMap.find(swapCharacter) != swapCharacterMap.end()) {
-					printf("Swapping Ryo for \'\'%ws\'\'\n", swapCharacterMap.at(swapCharacter));
-					auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterMap.at(swapCharacter), 0, 0, nullptr, true);
+			if (shouldSwapRyo && !hasSwappedRyo) {
+				if (swapCharacterPathMap.find(swapCharacterRyo) != swapCharacterPathMap.end()) {
+					printf("Swapping Ryo for \'%ws\'\n", swapCharacterPathMap.at(swapCharacterRyo));
+
+					auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterPathMap.at(swapCharacterRyo), 0, 0, nullptr, true);
 					if (temp) {
+						swapMeshRyo = temp;
+
 						This->Mesh->SetSkeletalMesh(temp, true); 
 						
 						for (int i = 0; i < temp->Materials.Num(); ++i) {
 							This->Mesh->SetMaterial(i, temp->Materials[i].MaterialInterface);
 						}
-						hasSwapped = true;
+
+						hasSwappedRyo = true;
+					} else {
+						printf("Couldn't load \'%ws\'\n", swapCharacterPathMap.at(swapCharacterRyo));
+						hasSwappedRyo = false;
 					}
-					else {
-						printf("Couldn't load \'\'%ws\'\'\n", swapCharacterMap.at(swapCharacter));
-						hasSwapped = false;
+				}
+			}
+		}
+
+		// Swap Character (for Shenhua)
+		// Shenhua is a regular S3 Character, so we gotta search for her.
+		if (_this->IsA(ABP_S3Character_C::StaticClass())) {
+			ABP_S3Character_C* This = reinterpret_cast<ABP_S3Character_C*> (_this);
+			if (shouldSwapShenhua && !hasSwappedShenhua) {
+				if (strstr(This->Name.GetName(), "SHE") && !strstr(This->Name.GetName(), "RYO"))
+				{
+					if (swapCharacterPathMap.find(swapCharacterShenhua) != swapCharacterPathMap.end()) {
+						printf("Swapping Shenhua for \'%ws\'\n", swapCharacterPathMap.at(swapCharacterShenhua));
+
+						auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterPathMap.at(swapCharacterShenhua), 0, 0, nullptr, true);
+						if (temp) {
+							swapMeshShenhua = temp;
+
+							This->Mesh->SetSkeletalMesh(temp, true);
+
+							for (int i = 0; i < temp->Materials.Num(); ++i) {
+								This->Mesh->SetMaterial(i, temp->Materials[i].MaterialInterface);
+							}
+
+							hasSwappedShenhua = true;
+						}
+						else {
+							printf("Couldn't load \'%ws\'\n", swapCharacterPathMap.at(swapCharacterShenhua));
+							hasSwappedShenhua = false;
+						}
+					}
+				}
+			}
+
+
+			if (toggleReplacements) 
+			{
+				for (auto& replacement : replacements)
+				{
+					// can't find either? we skipp
+					if ((swapCharacterPathMap.find(replacement.replacement_chara) == swapCharacterPathMap.end() ||
+						(swapCharacterPathMap.find(replacement.original_chara) == swapCharacterPathMap.end())))
+						continue;
+
+					// is the right character?
+					bool bIsValid = This->GetTagCharaName().GetName() == find_name_from_chara_enum(replacement.original_chara);
+					if (bIsValid && replacement.should_swap && !replacement.has_swapped)
+					{
+						auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterPathMap.at(replacement.replacement_chara), 0, 0, nullptr, true);
+						if (temp) {
+							This->Mesh->SetSkeletalMesh(temp, true);
+
+							for (int i = 0; i < temp->Materials.Num(); ++i)
+								This->Mesh->SetMaterial(i, temp->Materials[i].MaterialInterface);
+
+							replacement.has_swapped = true;
+
+							printf("Swapping \'%s\' for \'%s\'\n", replacement.original.c_str(), replacement.replacement.c_str());
+						}
+						else {
+							printf("Couldn't load \'%ws\'\n", replacement.replacement.c_str());
+							replacement.has_swapped = false;
+						}
 					}
 				}
 			}
@@ -533,8 +690,6 @@ void DebugRenderer() {
 	ImGui::End();
 
 	ImGui::Begin("Debug UI");
-
-	
 
 	if (ImGui::Button("List Cutscenes")) {
 		for (auto dbgCut : UObject::FindObjects<US3CutsceneLevelData>()) {
@@ -687,10 +842,13 @@ void DebugRenderer() {
 }
 #endif
 
-static bool charSelectedList	= false;
+static bool charSelectedListRyo		= false;
+static bool charSelectedListShenhua	= false;
 static bool showWarpingWindow	= false;
 
 static float warpPosition[3];
+
+static bool selectedReplacement = false;
 
 void RenderScene()
 {
@@ -792,20 +950,73 @@ void RenderScene()
 			ImGui::Unindent();
 		}
 		
-		ImGui::Checkbox("Should Swap?", &shouldSwap);
-		if (shouldSwap) {
-			ImGui::ListBoxHeader("##swapchar");
-			for (auto aChar : swapCharacterNames) {
-				std::string& aCharName = aChar.second;
-				if (ImGui::Selectable(aCharName.c_str(), charSelectedList)) {
-					swapCharacter = aChar.first;
-					hasSwapped = false;
+		if (replacements.size()) 
+		{
+			if (ImGui::Checkbox("Toggle Replacements", &toggleReplacements))
+			{
+				for (auto& replacement : replacements) 
+				{
+					if (toggleReplacements) 
+					{
+						replacement.should_swap = true;
+						replacement.has_swapped = false;
+					}
+					else 
+					{
+						replacement.should_swap = false;
+						replacement.has_swapped = false;
+					}
+				}
+			}
 
-					std::string currentCharName = aChar.second;
-					printf("Swap Character: %s\n", currentCharName.c_str());
+			if (toggleReplacements) 
+			{
+				ImGui::ListBoxHeader("##replacements");
+				for (auto& replacement : replacements) {
+					std::string tmp = replacement.original + " ---> " + replacement.replacement;
+					if (ImGui::Selectable(tmp.c_str(), selectedReplacement)) {
+						replacement.should_swap = !replacement.should_swap;
+						replacement.has_swapped = false;
+					}
+				}
+				ImGui::ListBoxFooter();
+			}
+		}
+
+		ImGui::Checkbox("Swap Ryo", &shouldSwapRyo);
+		if (swapCharacterNameMap.find(swapCharacterRyo) != swapCharacterNameMap.end()) {
+			std::string tmpName = swapCharacterNameMap.find(swapCharacterRyo)->second;
+			ImGui::Text("Current Char: %s", tmpName.c_str());
+		}
+
+		if (shouldSwapRyo) {
+			ImGui::ListBoxHeader("##swapryo");
+			for (auto& aChar : swapCharacterNameMap) {
+				std::string& aCharName = aChar.second;
+				if (ImGui::Selectable(aCharName.c_str(), charSelectedListRyo)) {
+					swapCharacterRyo = aChar.first;
+					hasSwappedRyo = false;
 				}
 			}
 			ImGui::ListBoxFooter(); 
+		}
+
+		ImGui::Checkbox("Swap Shenhua", &shouldSwapShenhua);
+		if (swapCharacterNameMap.find(swapCharacterShenhua) != swapCharacterNameMap.end()) {
+			std::string tmpName = swapCharacterNameMap.find(swapCharacterShenhua)->second;
+			ImGui::Text("Current Char: %s", tmpName.c_str());
+		}
+
+		if (shouldSwapShenhua) {
+			ImGui::ListBoxHeader("##swapshenhua");
+			for (auto& aChar : swapCharacterNameMap) {
+				std::string& aCharName = aChar.second;
+				if (ImGui::Selectable(aCharName.c_str(), charSelectedListShenhua)) {
+					swapCharacterShenhua = aChar.first;
+					hasSwappedShenhua = false;
+				}
+			}
+			ImGui::ListBoxFooter();
 		}
 
 		ImGui::End();
@@ -821,6 +1032,8 @@ Version theVersion;
 bool npcFuncHooked = false;
 
 void Attach() {
+	
+
 	Sleep(2000);
 	if (init() == -1) return;
 	g_BaseAddress = (DWORD_PTR)GetModuleHandleA(NULL);
@@ -850,7 +1063,8 @@ void Attach() {
 		return;
 	}
 	
-	swapCharacter = RyoHazuki;
+	swapCharacterRyo		= RyoHazuki;
+	swapCharacterShenhua	= Shenhua;
 
 	MH_CreateHook(reinterpret_cast<void*>(g_BaseAddress + staticLoadOffs), StaticLoadObject_Hook, reinterpret_cast<void**>(&StaticLoadObject_orig));
 	MH_EnableHook(reinterpret_cast<void*>(g_BaseAddress + staticLoadOffs));
@@ -1100,6 +1314,7 @@ void Attach() {
 		return;
 	}*/
 #endif
+	read_char_replacements("replacements.csv");
 
 	while (!receiveTickHooked) {
 		if (!receiveTickHooked) {
@@ -1118,9 +1333,8 @@ void Attach() {
 		}
 	}
 
-	DWORD_PTR worldOffs, engineOffs;
-
 	// @TODO: Update offsets for other versions...
+	DWORD_PTR worldOffs, engineOffs;
 	while (receiveTickHooked && g_ThreadAlive) {
 		if (theWorld == nullptr && theEngine == nullptr) {
 			if (theVersion == V10601_STEAM) {
