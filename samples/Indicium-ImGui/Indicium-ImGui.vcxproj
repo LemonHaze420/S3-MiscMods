@@ -60,7 +60,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -185,7 +185,7 @@
       <AdditionalDependencies>E:\_repo\Shenmue3_MiscMods\lib\Release\libMinHook.x64.lib;E:\_repo\Shenmue3SDK\x64\Lib\Release\Shenmue3SDK.lib;Iphlpapi.lib;d3d9.lib;d3d10.lib;d3d11.lib;d3dcompiler.lib;dxgi.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>XCOPY /F /Q /S /Y "$(TargetDir)\$(TargetName).asi" "E:\Games\Shenmue3\Shenmue3\Binaries\Win64\"</Command>
+      <Command>XCOPY /F /Q /S /Y "$(TargetDir)\$(TargetName).asi" "C:\Shenmue3\Shenmue3\Binaries\Win64\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

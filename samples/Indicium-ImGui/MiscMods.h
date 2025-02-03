@@ -31,7 +31,7 @@ using namespace SDK;
 #else
 #define MOD_NAME					"MiscMods"
 #endif
-#define MOD_VER						"1.14"
+#define MOD_VER						"1.15"
 #define MOD_STRING					MOD_NAME " " MOD_VER
 
 //#undef _RELEASE_MODE
@@ -212,12 +212,25 @@ bool IsZeroVector(const FVector& vec) {
 	return vec.X == 0 && vec.Y == 0 && vec.Z == 0;
 }
 
+#define OLD_WAY 
+
+void* tmpPtr = nullptr;
+
 void LoadAllLevels() {
+#ifdef OLD_WAY
 	for (auto level : UObject::FindObjects<ALevelStreamingVolume>()) {
 		if (level) {
 			level->SetActorScale3D({ 100000.f, 100000.f, 100000.f });
 		}
 	}
+#else
+	if (!tmpPtr) {
+		auto tmp = UObject::FindObject<ULevelStreaming>();
+		if (tmp) {
+			tmpPtr = &tmp;
+		}
+	}
+#endif
 }
 
 inline ABP_S3_Character_Adventure_C* GetRyo() {
@@ -376,10 +389,33 @@ static USkeletalMesh* swapMeshShenhua = nullptr;
 static bool save = false;
 static bool forceCanSkipDialog = true, forceSkipIntro = true;
 
+bool multMoneyReceived = false, hookedMoneyFunc = false;
+
+bool drainQOL = false;
+typedef void(__fastcall* moneyFunc_t)(__int64** _this, __int64* a2);
+moneyFunc_t SetMoneyOrig;
+
 UWorld* theWorld = nullptr;
 UEngine* theEngine = nullptr;
 
+void SetMoneyHook(__int64** _this, __int64* a2) {
+
+	SetMoneyOrig(_this, a2);
+
+	// @todo: money
+}
+
 void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
+	if (_this->IsA(ABP_S3BgmArea_C::StaticClass())) 
+	{
+		if (auto bgmArea = reinterpret_cast<ABP_S3BgmArea_C*> (_this))
+		{
+			printf("Area Name = %s\n", bgmArea->GetName().c_str());
+			printf("Is In Area? = %d\n", bgmArea->bIsInArea);
+		}
+	}
+
+
 	// Any Time Fishing mod
 	if (bAnyTimeFishing && _this->IsA(ABP_MiniGame_FishingManager_C::StaticClass())) {
 		ABP_MiniGame_FishingManager_C * fishMan = reinterpret_cast<ABP_MiniGame_FishingManager_C*> (_this);
@@ -453,6 +489,30 @@ void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
 		ABP_S3EnergyManager_C* energyManager = reinterpret_cast<ABP_S3EnergyManager_C*>(_this);
 		if (energyManager)
 			return;
+	}
+	// QoL patch for stamina
+	else if (!bNoDrainRunEnergy && _this->IsA(ABP_S3EnergyManager_C::StaticClass()) && !IsNameDefault(_this->GetFullName())) {
+		ABP_S3EnergyManager_C* energyManager = reinterpret_cast<ABP_S3EnergyManager_C*>(_this);
+
+		if (drainQOL) {
+			if (energyManager->NormalRunningDrainRate == 0.000667f) {
+				energyManager->NormalRunningDrainRate = 0.0000667f;
+			}
+		} else {
+			if (energyManager->NormalRunningDrainRate == 0.0000667f) {
+				energyManager->NormalRunningDrainRate = 0.000667f;
+			}
+		}
+	}
+	if (gameInstance && !hookedMoneyFunc) {
+		UFunction* fnPtr = UObject::FindObject<UFunction>("Function Shenmue3.S3GameInstance.SetHaveMoney");
+		if (fnPtr && fnPtr->Func != 0) {
+			MH_STATUS mhStatus1 = MH_CreateHook(reinterpret_cast<void**>(fnPtr->Func), SetMoneyHook, reinterpret_cast<void**>(&SetMoneyOrig));
+			mhStatus1 = MH_EnableHook(reinterpret_cast<void*>(fnPtr->Func));
+			if (mhStatus1 == MH_OK) {
+				hookedMoneyFunc = true;
+			}
+		}
 	}
 	// Remove Walk Only Triggers
 	else if (bNoWalkOnlyTriggers && _this->IsA(AS3WalkOnlyTrigger::StaticClass()) && !IsNameDefault(_this->GetFullName())) {
@@ -535,9 +595,21 @@ void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
 				}
 			}
 
-
 			if (toggleReplacements) 
 			{
+
+				/*if (1)
+				{
+					auto tag = This->GetTagCharaComponent();
+					if (tag) {
+						auto profile = tag->Profile;
+						printf("tag		= %s\n", tag->Name.GetName());
+						printf("gender	= %s\n", profile.Gender.GetValue() == ES3CharacterGender::Gender_Female ? "Female" : profile.Gender.GetValue() == ES3CharacterGender::Gender_Male ? "Male" : profile.Gender.GetValue() == ES3CharacterGender::Gender_Unspecified ? "Unspecified" : "UNKNOWN");
+						printf("age		= %d\nheight	= %f\nweight	= %d\n", profile.Age, profile.Height, profile.Weight);
+						printf("handedness	= %s\n", profile.Handedness.GetValue() == ES3HandednessType::Handedness_Left ? "Left" : "Right");
+					}
+				}*/
+
 				for (auto& replacement : replacements)
 				{
 					// can't find either? we skipp
@@ -545,23 +617,27 @@ void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
 						(swapCharacterPathMap.find(replacement.original_chara) == swapCharacterPathMap.end())))
 						continue;
 
-					// is the right character?
-					bool bIsValid = This->GetTagCharaName().GetName() == find_name_from_chara_enum(replacement.original_chara);
-					if (bIsValid && replacement.should_swap && !replacement.has_swapped)
+					// is the right character? have we swapped it already??
+					bool bIsValid = This->GetTagCharaName().GetName() == find_name_from_chara_enum(replacement.original_chara) &&
+									replacement.should_swap && !replacement.has_swapped;
+					if (bIsValid)
 					{
-						auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterPathMap.at(replacement.replacement_chara), 0, 0, nullptr, true);
-						if (temp) {
+						// load the replacement
+						if (auto temp = StaticLoadObject<USkeletalMesh>(nullptr, swapCharacterPathMap.at(replacement.replacement_chara), 0, 0, nullptr, true)) {
+							// swap
 							This->Mesh->SetSkeletalMesh(temp, true);
 
+							// re-assign materials
 							for (int i = 0; i < temp->Materials.Num(); ++i)
 								This->Mesh->SetMaterial(i, temp->Materials[i].MaterialInterface);
 
+							// update
 							replacement.has_swapped = true;
 
 							printf("Swapping \'%s\' for \'%s\'\n", replacement.original.c_str(), replacement.replacement.c_str());
 						}
 						else {
-							printf("Couldn't load \'%ws\'\n", replacement.replacement.c_str());
+							printf("Couldn't load \'%s\'\n", replacement.replacement.c_str());
 							replacement.has_swapped = false;
 						}
 					}
@@ -574,14 +650,6 @@ void ReceiveTickHook(class UObject* _this, __int64* a2, float* DeltaSeconds) {
 
 t_WindowProc OriginalWindowProc = nullptr;
 
-// PlayCutscene hook
-typedef void(__thiscall* PlayCutscene_t)(const FName CutsceneId);
-PlayCutscene_t PlayCutscene_orig;
-
-void PlayCutscene_Hook(const FName CutsceneId) {
-	printf("PlayCutscene_Hook: %s\n", CutsceneId.GetName());
-}
-
 using namespace ImGui;
 
 LRESULT WINAPI DetourWindowProc(
@@ -591,42 +659,43 @@ LRESULT WINAPI DetourWindowProc(
 	_In_ LPARAM lParam
 )
 {
-static std::once_flag flag;
-std::call_once(flag, []() { IndiciumEngineLogInfo("++ DetourWindowProc called"); });
+	static std::once_flag flag;
+	std::call_once(flag, []() { IndiciumEngineLogInfo("++ DetourWindowProc called"); });
 
-if (show_overlay) {
-	ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-	switch (Msg)
-	{
-	case WM_LBUTTONDOWN:
-		GetIO().MouseDown[0] = true; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_LBUTTONUP:
-		GetIO().MouseDown[0] = false; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_RBUTTONDOWN:
-		GetIO().MouseDown[1] = true; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_RBUTTONUP:
-		GetIO().MouseDown[1] = false; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_MBUTTONDOWN:
-		GetIO().MouseDown[2] = true; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_MBUTTONUP:
-		GetIO().MouseDown[2] = false; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_MOUSEWHEEL:
-		GetIO().MouseWheel += GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? +1.0f : -1.0f; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
-	case WM_MOUSEMOVE:
-		GetIO().MousePos.x = (signed short)(lParam); GetIO().MousePos.y = (signed short)(lParam >> 16); return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
-		break;
+	if (show_overlay) {
+		ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+		switch (Msg)
+		{
+		case WM_LBUTTONDOWN:
+			GetIO().MouseDown[0] = true; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_LBUTTONUP:
+			GetIO().MouseDown[0] = false; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_RBUTTONDOWN:
+			GetIO().MouseDown[1] = true; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_RBUTTONUP:
+			GetIO().MouseDown[1] = false; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_MBUTTONDOWN:
+			GetIO().MouseDown[2] = true; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_MBUTTONUP:
+			GetIO().MouseDown[2] = false; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_MOUSEWHEEL:
+			GetIO().MouseWheel += GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? +1.0f : -1.0f; return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		case WM_MOUSEMOVE:
+			GetIO().MousePos.x = (signed short)(lParam); GetIO().MousePos.y = (signed short)(lParam >> 16); return ImGui_ImplWin32_WndProcHandler(hWnd, Msg, wParam, lParam);
+			break;
+		}
 	}
-}
-return OriginalWindowProc(hWnd, Msg, wParam, lParam);
+	return OriginalWindowProc(hWnd, Msg, wParam, lParam);
 }
 
+int user_money = 0;
 
 #pragma region Misc Mods UI Rendering
 
@@ -637,8 +706,28 @@ char user_objBrowserFilter[256] = { '\0' };
 bool bailuOrChobu = false;
 
 AS3SearchArea* gCutsceneMgr = nullptr;
+AS3BgmManager* gBgmManager = nullptr;
+ABP_S3BgmPlayer_C* gBgmPlayer = nullptr;
+
+
+std::vector<AS3BgmPlayer*> bgmPlayers;
+
 bool isSelected = false, showObjBrowser = false, showOnlyInPersistentLevel = true;
 void DebugRenderer() {
+	for (auto aBgmPlayer : UObject::FindObjects<ABP_S3BgmPlayer_C>()) {
+		if (IsNameDefault(aBgmPlayer->GetFullName()))
+			continue;
+		else if (aBgmPlayer != gBgmPlayer)
+			gBgmPlayer = aBgmPlayer;
+	}
+
+	for (auto aBgmManager : UObject::FindObjects<AS3BgmManager>()) {
+		if (IsNameDefault(aBgmManager->GetFullName()))
+			continue;
+		else if (aBgmManager != gBgmManager)
+			gBgmManager = aBgmManager;
+	}
+
 	for (auto aCutsceneMgr : UObject::FindObjects<AS3SearchArea>()) {
 		if (IsNameDefault(aCutsceneMgr->GetFullName()))
 			continue;
@@ -653,7 +742,7 @@ void DebugRenderer() {
 	ImGui::Checkbox("Show Only Objects in Persistent Level", &showOnlyInPersistentLevel);
 	if (showObjBrowser) {
 		ImGui::InputText("Filter", user_objBrowserFilter, 256);
-		ImGui::ListBoxHeader("", ImVec2(425, 550));
+		ImGui::BeginListBox("", ImVec2(425, 550));
 		if (UObject::GetGlobalObjects().Num() > 1) {
 			for (int i = 0; i < UObject::GetGlobalObjects().Num(); i++) {
 				if (!UObject::GetGlobalObjects().IsValidIndex(i))
@@ -685,11 +774,32 @@ void DebugRenderer() {
 				}
 			}
 		}
-		ImGui::ListBoxFooter();
+		ImGui::EndListBox();
 	}
 	ImGui::End();
 
 	ImGui::Begin("Debug UI");
+
+	if (ImGui::Button("Restart BGM"))
+	{
+		for (auto bgmMan : UObject::FindObjects<AS3BgmManager>())
+		{
+			bgmMan->bDisableFadePause = true;
+			for (auto bgmArea : UObject::FindObjects< ABP_S3BgmArea_C>())
+			{
+				if (bgmArea->ActiveCue)
+					printf("activecue = %s\n", bgmArea->ActiveCue->GetName().c_str());
+
+				
+
+				if (bgmArea->bIsInArea && bgmArea->SoundAtomCue) 
+				{
+					printf("loaded = %d\n", bgmArea->SoundAtomCue->CueSheet->IsLoaded());
+				}
+			}
+		}
+	}
+
 
 	if (ImGui::Button("List Cutscenes")) {
 		for (auto dbgCut : UObject::FindObjects<US3CutsceneLevelData>()) {
@@ -724,6 +834,7 @@ void DebugRenderer() {
 			}
 		}
 	}
+
 
 	if (ImGui::Button("Load All Levels"))
 		LoadAllLevels();
@@ -810,8 +921,21 @@ void DebugRenderer() {
 
 			if(bgmArea->SoundAtomCue)
 				printf("SoundAtomCue      = %s\n", bgmArea->SoundAtomCue->GetFullName().c_str());
-			if (bgmArea->SoundAtomCueSheet)
+			if (bgmArea->SoundAtomCueSheet) {
 				printf("SoundAtomCueSheet = %s\n", bgmArea->SoundAtomCueSheet->GetFullName().c_str());
+
+
+
+				if (!bgmArea->SoundAtomCueSheet->IsLoaded())
+				{
+					printf("Not Loaded!!!\n");
+				}
+
+			}
+
+
+
+
 
 			++i;
 		}
@@ -904,6 +1028,16 @@ void RenderScene()
 		ImGui::Text("Mods");
 		ImGui::Separator();
 
+		ImGui::Checkbox("Multiply Money Earned", &multMoneyReceived);
+		ImGui::Checkbox("Energy Drain QOL", &drainQOL);
+		
+		ImGui::InputInt("", &user_money);
+		if (ImGui::Button("Set Money") && gameInstance) {
+			// MoneyFunc_Orig(user_money);
+
+			gameInstance->SetHaveMoney(user_money);
+		}
+
 		ImGui::Checkbox("Show Warping Window", &showWarpingWindow);
 
 		// Classic Camera Mod
@@ -971,7 +1105,7 @@ void RenderScene()
 
 			if (toggleReplacements) 
 			{
-				ImGui::ListBoxHeader("##replacements");
+				ImGui::BeginListBox("##replacements");
 				for (auto& replacement : replacements) {
 					std::string tmp = replacement.original + " ---> " + replacement.replacement;
 					if (ImGui::Selectable(tmp.c_str(), selectedReplacement)) {
@@ -979,7 +1113,7 @@ void RenderScene()
 						replacement.has_swapped = false;
 					}
 				}
-				ImGui::ListBoxFooter();
+				ImGui::EndListBox();
 			}
 		}
 
@@ -990,7 +1124,7 @@ void RenderScene()
 		}
 
 		if (shouldSwapRyo) {
-			ImGui::ListBoxHeader("##swapryo");
+			ImGui::BeginListBox("##swapryo");
 			for (auto& aChar : swapCharacterNameMap) {
 				std::string& aCharName = aChar.second;
 				if (ImGui::Selectable(aCharName.c_str(), charSelectedListRyo)) {
@@ -998,7 +1132,7 @@ void RenderScene()
 					hasSwappedRyo = false;
 				}
 			}
-			ImGui::ListBoxFooter(); 
+			ImGui::EndListBox(); 
 		}
 
 		ImGui::Checkbox("Swap Shenhua", &shouldSwapShenhua);
@@ -1008,7 +1142,7 @@ void RenderScene()
 		}
 
 		if (shouldSwapShenhua) {
-			ImGui::ListBoxHeader("##swapshenhua");
+			ImGui::BeginListBox("##swapshenhua");
 			for (auto& aChar : swapCharacterNameMap) {
 				std::string& aCharName = aChar.second;
 				if (ImGui::Selectable(aCharName.c_str(), charSelectedListShenhua)) {
@@ -1016,7 +1150,7 @@ void RenderScene()
 					hasSwappedShenhua = false;
 				}
 			}
-			ImGui::ListBoxFooter();
+			ImGui::EndListBox();
 		}
 
 		ImGui::End();
@@ -1032,7 +1166,7 @@ Version theVersion;
 bool npcFuncHooked = false;
 
 void Attach() {
-	
+
 
 	Sleep(2000);
 	if (init() == -1) return;
@@ -1062,9 +1196,9 @@ void Attach() {
 		MessageBoxA(NULL, "Unable to find StaticLoadObject offset. Exiting.", "Misc Mods", MB_OK);
 		return;
 	}
-	
-	swapCharacterRyo		= RyoHazuki;
-	swapCharacterShenhua	= Shenhua;
+
+	swapCharacterRyo = RyoHazuki;
+	swapCharacterShenhua = Shenhua;
 
 	MH_CreateHook(reinterpret_cast<void*>(g_BaseAddress + staticLoadOffs), StaticLoadObject_Hook, reinterpret_cast<void**>(&StaticLoadObject_orig));
 	MH_EnableHook(reinterpret_cast<void*>(g_BaseAddress + staticLoadOffs));
@@ -1072,7 +1206,7 @@ void Attach() {
 #ifdef PROCESS_EVENT_LOGGER
 	if (std::filesystem::exists("debug.log")) {
 		std::filesystem::remove("debug.log");
-}
+	}
 	ofs.open("debug.log");
 #endif
 

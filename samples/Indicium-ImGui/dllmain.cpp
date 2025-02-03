@@ -51,6 +51,8 @@ PINDICIUM_ENGINE engine = nullptr;
 
 extern bool g_ThreadAlive;
 
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 /**
  * \fn  BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
  *
@@ -118,8 +120,8 @@ BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID)
 			// TODO: cover failure
 			// 
 			err = IndiciumEngineInit(engine, EvtIndiciumGameHooked);
-
 			CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)Attach, NULL, 0, NULL);
+
 		}
 
 		break;
@@ -160,8 +162,8 @@ void EvtIndiciumGameHooked(const INDICIUM_D3D_VERSION GameVersion)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io; 
-    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
-    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;   // Enable Gamepad Controls
 
 	io.MouseDrawCursor = true;
 	io.IniFilename = NULL;
@@ -169,6 +171,7 @@ void EvtIndiciumGameHooked(const INDICIUM_D3D_VERSION GameVersion)
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
     //ImGui::StyleColorsClassic();
+
 }
 
 /**
